@@ -1,6 +1,6 @@
 cachetools==4.2.2
 certifi==2021.5.30
-charset-normalizer==2.0.3
+charset-normalizer==2.0.12
 google-auth==1.33.0
 idna==3.2
 pyasn1==0.4.8

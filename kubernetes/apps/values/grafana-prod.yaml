@@ -1,9 +1,12 @@
 ingress:
-
   enabled: true
+  annotations:
+    kubernetes.io/ingress.class: nginx
   hosts:
     - monitoring.k8s.calitp.jarv.us
+    - monitoring.calitp.org
   tls:
     - secretName: grafana-tls
       hosts:
         - monitoring.k8s.calitp.jarv.us
+        - monitoring.calitp.org

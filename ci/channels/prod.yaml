@@ -1,6 +1,11 @@
 calitp:
   channel: prod
   releases:
+    - name: archiver
+      driver: kustomize
+      kustomize_dir: kubernetes/apps/overlays/gtfs-rt-archiver-v3-prod
+      secrets:
+        - gtfs-rt-v3_gtfs-feed-secrets
     - name: airflow-jobs
       driver: kustomize
       kustomize_dir: kubernetes/apps/manifests/airflow-jobs
@@ -24,6 +29,7 @@ calitp:
       secrets:
         - jupyterhub_jupyterhub-gcloud-service-key
         - jupyterhub_jupyterhub-github-config
+      timeout: 10m0s
     - name: loki
       driver: helm
       namespace: monitoring-loki
@@ -36,8 +42,6 @@ calitp:
       helm_chart: kubernetes/apps/charts/metabase
       helm_values:
         - kubernetes/apps/values/metabase.yaml
-      secrets:
-        - metabase_service_account_key
     - name: postgresql-backup-grafana
       driver: helm
       namespace: monitoring-grafana
@@ -86,8 +90,17 @@ calitp:
       driver: kustomize
       kustomize_dir: kubernetes/apps/overlays/prod-sftp-ingest-elavon
       # TODO: sftp secrets
-    # TODO: Sentry
-#    - name: sentry
-#      secrets:
-#        - sentry_sentry-secret
-#        - sentry_sentry-sentry-postgresql
+    - name: sentry
+      driver: helm
+      namespace: sentry
+      helm_name: sentry
+      helm_chart: kubernetes/apps/charts/sentry
+      secrets:
+        - sentry_sentry-secret
+        - sentry_sentry-sentry-postgresql
+      timeout: 10m0s
+    - name: dask
+      driver: helm
+      namespace: dask
+      helm_name: dask
+      helm_chart: kubernetes/apps/charts/dask

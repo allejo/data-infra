@@ -1,7 +1,7 @@
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
+from typing import List, NoReturn, Optional
 
 import git
 import yaml
@@ -9,19 +9,14 @@ from google.cloud import secretmanager
 from invoke import Exit, Result, task
 from pydantic import BaseModel, validator
 
-KUSTOMIZE_HELM_TEMPLATE = """
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-namespace: {namespace}
-resources:
-- manifest.yaml
-"""
-
-
 GENERIC_HELP = {
     "driver": "The k8s driver (kustomize or helm)",
     "app": "The specific app/release (e.g. metabase or archiver)",
 }
+
+
+def _assert_never(x: NoReturn) -> NoReturn:
+    assert False, "Unhandled type: {}".format(type(x).__name__)
 
 
 class ReleaseDriver(str, Enum):
@@ -42,6 +37,7 @@ class Release(BaseModel):
     helm_name: Optional[str]
     helm_chart: Optional[Path]
     helm_values: List[Path] = []
+    timeout: Optional[str]
 
     # for kustomize
     kustomize_dir: Optional[Path]
@@ -64,6 +60,11 @@ class CalitpConfig(BaseModel):
         if not self.git_repo.working_tree_dir:
             return None
         return Path(self.git_repo.working_tree_dir)
+
+
+@task
+def install_helm_plugins(c):
+    c.run("helm plugin install https://github.com/databus23/helm-diff", warn=True)
 
 
 @task
@@ -132,14 +133,12 @@ def secrets(
                         f.write(secret_contents)
                     print(f"Applying {release_secret}...", flush=True)
                     result = c.run(
-                        f"kubectl apply {ns_str} -f {secret_path}", hide=hide, warn=True
+                        f"kubectl apply {ns_str} -f {secret_path}",
+                        hide=hide,
+                        warn=True,
                     )
                     if result.exited:
-                        print(
-                            f"FAILURE: Failed to apply secret {release_secret}.",
-                            flush=True,
-                        )
-                        raise Exit
+                        raise Exit(f"FAILURE: Failed to apply secret {release_secret}.")
                     print(f"Successfully applied {release_secret}.", flush=True)
                 found_secret = True
 
@@ -149,6 +148,7 @@ def secrets(
 
 @task(
     parse_calitp_config,
+    install_helm_plugins,
     help={
         **GENERIC_HELP,
         "outfile": "File in which to save the combined kubectl diff output",
@@ -178,27 +178,33 @@ def diff(
             chart_path = c.calitp_config.git_root / Path(release.helm_chart)
             c.run(f"helm dependency update {chart_path}")
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                manifest_path = Path(tmpdir) / Path("manifest.yaml")
-                kustomization_path = Path(tmpdir) / Path("kustomization.yaml")
-                values_str = " ".join(
+            values_str = " ".join(
+                [
+                    f"--values {c.calitp_config.git_root / Path(values_file)}"
+                    for values_file in release.helm_values
+                ]
+            )
+            assert release.helm_name is not None
+            result = c.run(
+                " ".join(
                     [
-                        f"--values {c.calitp_config.git_root / Path(values_file)}"
-                        for values_file in release.helm_values
+                        "helm",
+                        "diff",
+                        "upgrade",
+                        release.helm_name,
+                        str(chart_path),
+                        f"--namespace={release.namespace}",
+                        values_str,
+                        "-C 5",  # only include 5 lines of context
                     ]
-                )
-                # TODO: consider looking into https://github.com/databus23/helm-diff
-                c.run(
-                    f"helm template {release.helm_name} {chart_path} --namespace {release.namespace} {values_str} > {manifest_path}"
-                )
-                with open(kustomization_path, "w") as f:
-                    f.write(KUSTOMIZE_HELM_TEMPLATE.format(namespace=release.namespace))
-                result = c.run(f"kubectl diff -k {tmpdir}", warn=True)
+                ),
+                warn=True,
+            )
         else:
             print(f"Encountered unknown driver: {release.driver}", flush=True)
             raise RuntimeError
 
-        if result.exited != 0:
+        if result.stdout:
             full_diff += result.stdout
 
     msg = (
@@ -249,9 +255,19 @@ def release(
                 c.run(f"kubectl create ns {release.namespace}")
                 verb = "install"
 
+            assert release.helm_name is not None
             c.run(
-                f"helm {verb} {release.helm_name} {chart_path} --namespace {release.namespace} {values_str}"
+                " ".join(
+                    [
+                        "helm",
+                        verb,
+                        release.helm_name,
+                        str(chart_path),
+                        f"--namespace {release.namespace}",
+                        values_str,
+                        f"--timeout {release.timeout}" if release.timeout else "",
+                    ]
+                )
             )
         else:
-            print(f"Encountered unknown driver: {release.driver}", flush=True)
-            raise RuntimeError
+            _assert_never(release.driver)

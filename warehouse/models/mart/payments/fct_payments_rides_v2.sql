@@ -89,6 +89,7 @@ debited_micropayments AS (
     SELECT *
     FROM stg_littlepay__micropayments
     WHERE type = 'DEBIT'
+    AND charge_type != 'pending_charge_fare'
 ),
 
 refunded_micropayments AS (
